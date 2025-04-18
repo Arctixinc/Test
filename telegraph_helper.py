@@ -7,7 +7,7 @@ from os import path as ospath
 from aiofiles.os import listdir
 from telegraph.upload import upload_file
 from secrets import token_hex
-from telegraph.aio import Telegraph
+from telegraph import Telegraph
 from telegraph.exceptions import RetryAfterError
 import logging
 
