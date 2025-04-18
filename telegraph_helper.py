@@ -1,5 +1,7 @@
-# telegraph_helper.py
+        # telegraph_helper.py
+
 import asyncio
+import time
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
@@ -44,6 +46,18 @@ class TelegraphHelper:
             await asyncio.sleep(st.retry_after)
             return await self.create_page(title, content)
 
+    def safe_upload(self, path, retries=3, delay=2):
+        for attempt in range(retries):
+            try:
+                result = upload_file(path)
+                if isinstance(result, list) and result:
+                    return result[0]  # return the file path string
+            except Exception as e:
+                LOGGER.error(f"Attempt {attempt + 1}: Failed to upload {path}: {e}")
+                if attempt < retries - 1:
+                    time.sleep(delay)
+        return None
+
     async def upload_screenshots_from_dir(self, thumbs_dir):
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
@@ -53,12 +67,12 @@ class TelegraphHelper:
         thumbs = await listdir(thumbs_dir)
         for thumb in natsorted(thumbs):
             image_path = ospath.join(thumbs_dir, thumb)
-            try:
-                uploaded = upload_file(image_path)
-                th_html += f'<img src="https://graph.org{uploaded[0]}"><br><br>'
-            except Exception as e:
-                LOGGER.error(f"Failed to upload {thumb}: {e}")
+            uploaded_path = self.safe_upload(image_path)
+            if uploaded_path:
+                th_html += f'<img src="https://graph.org{uploaded_path}"><br><br>'
+                await asyncio.sleep(1)  # optional: slight delay between uploads
+            else:
+                LOGGER.error(f"Failed to upload {thumb} after retries.")
 
         page = await self.create_page(title="Screenshots", content=th_html)
         return f"https://graph.org/{page['path']}"
-        
