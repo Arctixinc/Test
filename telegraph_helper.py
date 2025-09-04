@@ -5,21 +5,16 @@ import re
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
-from telegraph.upload import upload_file
-from secrets import token_hex
 from telegraph import Telegraph
 from telegraph.exceptions import RetryAfterError
-import logging
+from secrets import token_hex
 import requests
 import datetime
+import logging
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("Telegraph")
-
-# Regex patterns for content cleaning
-EMOJI_PATTERN = re.compile(r'<emoji id="\d+">')
-TITLE_PATTERN = re.compile(r"title:? (.*)", re.IGNORECASE)
 
 
 class TelegraphHelper:
@@ -31,7 +26,8 @@ class TelegraphHelper:
         self.author_name = 'Arctix'
         self.author_url = 'https://t.me/arctixinc'
         self.token_file = token_file
-        # try to load token file if exists
+
+        # try to load saved token
         try:
             import json
             if ospath.exists(self.token_file):
@@ -103,56 +99,44 @@ class TelegraphHelper:
             return None
 
     async def upload_screenshots_from_dir(self, thumbs_dir):
-        """Upload screenshots to envs.sh and create a Telegraph 'News-style' page
-        using only allowed HTML tags (h3, p, strong, em, img, br, ul/li)."""
+        """Upload screenshots to envs.sh and create a Telegraph page with simple clean style."""
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
             return None
 
-        # ensure Telegraph account exists / token is set
         if not self.access_token:
             await self.create_account()
-
-        # Build allowed-html news style content
-        today = datetime.datetime.now().strftime("%B %d, %Y")
-        # headline and date (use h3 and p/em — allowed)
-        th_html = []
-        th_html.append(f"<h3>Latest Screenshots Report</h3>")
-        th_html.append(f"<p><em>Published on {today}</em></p>")
-        th_html.append("<p></p>")  # small spacer
 
         thumbs = await listdir(thumbs_dir)
         thumbs = natsorted(thumbs)
 
+        th_html = []
         uploaded_count = 0
-        for idx, thumb in enumerate(thumbs, start=1):
+
+        for thumb in thumbs:
             image_path = ospath.join(thumbs_dir, thumb)
             if not ospath.isfile(image_path):
-                LOGGER.warning("Skipping non-file: %s", image_path)
                 continue
 
             uploaded_url = await self.upload_to_envs(image_path)
             if uploaded_url:
-                # Use only <p> and <img> and a small caption in <p><strong>...</strong></p>
-                # telegraph accepts <img src="..."> inside content
+                # Only the image, no filename, no "Screenshot X"
                 th_html.append(f'<p><img src="{uploaded_url}"></p>')
-                th_html.append(f'<p><strong>Screenshot {idx}:</strong> {thumb}</p>')
-                th_html.append("<p></p>")  # spacer
+                th_html.append("<br>")
                 uploaded_count += 1
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {thumb} to envs.sh")
 
-        # footer (simple allowed tags)
-        th_html.append(f'<p><strong>Author:</strong> {self.author_name} | <a href="{self.author_url}">Contact</a></p>')
-        th_html.append(f'<p>Powered by {self.domain} × envs.sh</p>')
-
-        # join content safely (telegraph expects a string html_content)
-        content = "\n".join(th_html)
+        # Add footer with date and credit
+        today = datetime.datetime.now().strftime("%B %d, %Y")
+        th_html.append(f'<p><em>Published on {today}</em></p>')
+        th_html.append(f'<p><strong>{self.author_name}</strong> — <a href="{self.author_url}">Contact</a></p>')
 
         if uploaded_count == 0:
             LOGGER.error("No screenshots uploaded successfully; not creating page.")
             return None
 
-        page = await self.create_page(title="News Report", content=content)
+        content = "\n".join(th_html)
+        page = await self.create_page(title="Screenshots Gallery", content=content)
         return f"https://{self.domain}/{page['path']}"
