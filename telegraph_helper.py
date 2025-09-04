@@ -1,42 +1,72 @@
 # telegraph_helper.py
 
 import asyncio
+import re
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
-from telegraph import Telegraph
 from telegraph.upload import upload_file
-from telegraph.exceptions import RetryAfterError
 from secrets import token_hex
+from telegraph import Telegraph
+from telegraph.exceptions import RetryAfterError
+import logging
 import requests
 import datetime
-import logging
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("Telegraph")
 
+# Regex patterns for content cleaning
+EMOJI_PATTERN = re.compile(r'<emoji id="\d+">')
+TITLE_PATTERN = re.compile(r"title:? (.*)", re.IGNORECASE)
+
 
 class TelegraphHelper:
-    def __init__(self, domain="graph.org"):
+    def __init__(self, domain='graph.org', token_file='telegraph_token.json'):
         self.domain = domain
         self.telegraph = Telegraph(domain=domain)
         self.short_name = token_hex(4)
         self.access_token = None
-        self.author_name = "Arctix"
-        self.author_url = "https://t.me/arctixinc"
+        self.author_name = 'Arctix'
+        self.author_url = 'https://t.me/arctixinc'
+        self.token_file = token_file
+        # try to load token file if exists
+        try:
+            import json
+            if ospath.exists(self.token_file):
+                with open(self.token_file, "r") as f:
+                    data = json.load(f)
+                    self.access_token = data.get("access_token")
+                    if self.access_token:
+                        self.telegraph = Telegraph(domain=self.domain, access_token=self.access_token)
+                        LOGGER.info("Loaded existing Telegraph access token.")
+        except Exception:
+            pass
 
     async def create_account(self):
+        if self.access_token:
+            LOGGER.info("Using existing Telegraph account.")
+            return
+
         LOGGER.info("Creating Telegraph Account (in thread)")
         result = await asyncio.to_thread(
             self.telegraph.create_account,
             short_name=self.short_name,
             author_name=self.author_name,
-            author_url=self.author_url,
+            author_url=self.author_url
         )
         self.access_token = result.get("access_token")
         if self.access_token:
             self.telegraph = Telegraph(access_token=self.access_token, domain=self.domain)
+            # persist token
+            try:
+                import json
+                with open(self.token_file, "w") as f:
+                    json.dump({"access_token": self.access_token}, f)
+                LOGGER.info("Telegraph access token saved to %s", self.token_file)
+            except Exception as e:
+                LOGGER.warning("Failed to save token file: %s", e)
         LOGGER.info(f"Telegraph Account Generated : {self.short_name} (access_token set)")
 
     async def create_page(self, title, content):
@@ -46,11 +76,11 @@ class TelegraphHelper:
                 title=title,
                 author_name=self.author_name,
                 author_url=self.author_url,
-                html_content=content,
+                html_content=content
             )
             return page
         except RetryAfterError as st:
-            LOGGER.warning(f"Telegraph Flood control exceeded. Sleeping {st.retry_after} seconds.")
+            LOGGER.warning(f'Telegraph Flood control exceeded. Sleeping {st.retry_after} seconds.')
             await asyncio.sleep(st.retry_after)
             return await self.create_page(title, content)
 
@@ -73,46 +103,56 @@ class TelegraphHelper:
             return None
 
     async def upload_screenshots_from_dir(self, thumbs_dir):
-        """Upload screenshots to envs.sh and create a Telegraph 'News Style' page."""
+        """Upload screenshots to envs.sh and create a Telegraph 'News-style' page
+        using only allowed HTML tags (h3, p, strong, em, img, br, ul/li)."""
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
             return None
 
+        # ensure Telegraph account exists / token is set
+        if not self.access_token:
+            await self.create_account()
+
+        # Build allowed-html news style content
         today = datetime.datetime.now().strftime("%B %d, %Y")
-        th_html = f"""
-        <article>
-            <header>
-                <h2>Latest Screenshots Report</h2>
-                <p><em>Published on {today}</em></p>
-                <hr>
-            </header>
-        """
+        # headline and date (use h3 and p/em — allowed)
+        th_html = []
+        th_html.append(f"<h3>Latest Screenshots Report</h3>")
+        th_html.append(f"<p><em>Published on {today}</em></p>")
+        th_html.append("<p></p>")  # small spacer
 
         thumbs = await listdir(thumbs_dir)
-        for idx, thumb in enumerate(natsorted(thumbs), start=1):
+        thumbs = natsorted(thumbs)
+
+        uploaded_count = 0
+        for idx, thumb in enumerate(thumbs, start=1):
             image_path = ospath.join(thumbs_dir, thumb)
+            if not ospath.isfile(image_path):
+                LOGGER.warning("Skipping non-file: %s", image_path)
+                continue
+
             uploaded_url = await self.upload_to_envs(image_path)
             if uploaded_url:
-                th_html += f"""
-                <figure>
-                    <img src="{uploaded_url}" alt="Screenshot {idx}">
-                    <figcaption>Screenshot {idx}</figcaption>
-                </figure>
-                <br>
-                """
+                # Use only <p> and <img> and a small caption in <p><strong>...</strong></p>
+                # telegraph accepts <img src="..."> inside content
+                th_html.append(f'<p><img src="{uploaded_url}"></p>')
+                th_html.append(f'<p><strong>Screenshot {idx}:</strong> {thumb}</p>')
+                th_html.append("<p></p>")  # spacer
+                uploaded_count += 1
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {thumb} to envs.sh")
 
-        th_html += f"""
-            <footer>
-                <hr>
-                <p><strong>Author:</strong> {self.author_name} |
-                <a href="{self.author_url}">Contact</a></p>
-                <p>Powered by Graph.org × envs.sh</p>
-            </footer>
-        </article>
-        """
+        # footer (simple allowed tags)
+        th_html.append(f'<p><strong>Author:</strong> {self.author_name} | <a href="{self.author_url}">Contact</a></p>')
+        th_html.append(f'<p>Powered by {self.domain} × envs.sh</p>')
 
-        page = await self.create_page(title="News Report", content=th_html)
+        # join content safely (telegraph expects a string html_content)
+        content = "\n".join(th_html)
+
+        if uploaded_count == 0:
+            LOGGER.error("No screenshots uploaded successfully; not creating page.")
+            return None
+
+        page = await self.create_page(title="News Report", content=content)
         return f"https://{self.domain}/{page['path']}"
