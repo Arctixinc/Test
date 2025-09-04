@@ -1,6 +1,7 @@
 # telegraph_helper.py
 
 import asyncio
+import os
 import logging
 import requests
 from natsort import natsorted
@@ -9,7 +10,7 @@ from aiofiles.os import listdir
 from telegraph import Telegraph
 from telegraph.exceptions import RetryAfterError
 from secrets import token_hex
-from pdf2image import convert_from_path
+import fitz  # PyMuPDF
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
@@ -60,12 +61,7 @@ class TelegraphHelper:
             try:
                 with open(path, "rb") as f:
                     files = {"file": f}
-                    response = await asyncio.to_thread(
-                        requests.post,
-                        "https://envs.sh",
-                        files=files,
-                        timeout=30
-                    )
+                    response = requests.post("https://envs.sh", files=files, timeout=15)
                 if response.ok:
                     url = response.text.strip()
                     LOGGER.info("File uploaded to envs.sh: %s", url)
@@ -79,7 +75,7 @@ class TelegraphHelper:
         return None
 
     async def upload_screenshots_from_dir(self, thumbs_dir):
-        """Upload all images from a directory to envs.sh and embed in Telegraph page."""
+        """Upload all images from a directory."""
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
             return None
@@ -88,9 +84,9 @@ class TelegraphHelper:
         thumbs = await listdir(thumbs_dir)
         for thumb in natsorted(thumbs):
             image_path = ospath.join(thumbs_dir, thumb)
-            uploaded_url = await self.safe_upload(image_path)
-            if uploaded_url:
-                th_html += f'<img src="{uploaded_url}" style="max-width:100%;margin:10px 0;"><br>'
+            uploaded_path = await self.safe_upload(image_path)
+            if uploaded_path:
+                th_html += f'<img src="{uploaded_path}" style="max-width:100%;margin:10px 0;"><br>'
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {thumb} after retries.")
@@ -99,28 +95,27 @@ class TelegraphHelper:
         return f"https://graph.org/{page['path']}"
 
     async def upload_from_pdf(self, pdf_url):
-        """Download a PDF, extract pages as images, upload to envs.sh, and create a Telegraph page."""
+        """Download a PDF, extract pages as images using PyMuPDF, upload them, and create a Telegraph page."""
         LOGGER.info(f"Downloading PDF from {pdf_url}")
         response = requests.get(pdf_url)
-        pdf_path = "input.pdf"
-        with open(pdf_path, "wb") as f:
-            f.write(response.content)
+        pdf_bytes = response.content
 
-        # Convert PDF pages to images
-        LOGGER.info("Extracting images from PDF...")
-        pages = convert_from_path(pdf_path)
+        # Extract pages using PyMuPDF
+        LOGGER.info("Extracting images from PDF with PyMuPDF...")
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
         image_paths = []
-        for i, page in enumerate(pages):
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap()
             img_path = f"page_{i+1}.jpg"
-            page.save(img_path, "JPEG")
+            pix.save(img_path)
             image_paths.append(img_path)
 
         # Build Telegraph HTML
         th_html = "<h3>PDF Report</h3><br>"
         for img_path in image_paths:
-            uploaded_url = await self.safe_upload(img_path)
-            if uploaded_url:
-                th_html += f'<img src="{uploaded_url}" style="max-width:100%;margin:10px 0;"><br>'
+            uploaded_path = await self.safe_upload(img_path)
+            if uploaded_path:
+                th_html += f'<img src="{uploaded_path}" style="max-width:100%;margin:10px 0;"><br>'
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {img_path} after retries.")
