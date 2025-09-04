@@ -80,7 +80,7 @@ class TelegraphHelper:
         """
 
     def _generate_image_container(self, image_url, caption=None):
-        """Generate styled image container using allowed tags"""
+        """Generate styled image container using allowed tags with click-to-open functionality"""
         caption_html = f'<p style="text-align: center; font-size: 12px; color: #666; margin-top: 5px;">{caption}</p>' if caption else ''
         
         return f"""
@@ -91,17 +91,23 @@ class TelegraphHelper:
             margin: 15px 0;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
             text-align: center;
+            cursor: pointer;
         ">
-            <img 
-                src="{image_url}" 
-                style="
-                    max-width: 100%;
-                    height: auto;
-                    border-radius: 6px;
-                    border: 1px solid #e0e0e0;
-                "
-                onerror="this.style.display='none'"
-            >
+            <a href="{image_url}" target="_blank" style="text-decoration: none;">
+                <img 
+                    src="{image_url}" 
+                    style="
+                        max-width: 100%;
+                        height: auto;
+                        border-radius: 6px;
+                        border: 1px solid #e0e0e0;
+                        transition: transform 0.2s;
+                    "
+                    onerror="this.style.display='none'"
+                    onmouseover="this.style.transform='scale(1.02)'"
+                    onmouseout="this.style.transform='scale(1)'"
+                >
+            </a>
             {caption_html}
         </figure>
         """
