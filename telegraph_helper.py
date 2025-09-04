@@ -1,7 +1,6 @@
 # telegraph_helper.py
 
 import asyncio
-import re
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
@@ -23,11 +22,9 @@ class TelegraphHelper:
         self.telegraph = Telegraph(domain=domain)
         self.short_name = token_hex(4)
         self.access_token = None
-        self.author_name = 'Arctix'
-        self.author_url = 'https://t.me/arctixinc'
         self.token_file = token_file
 
-        # try to load saved token
+        # Try to load saved token
         try:
             import json
             if ospath.exists(self.token_file):
@@ -49,13 +46,11 @@ class TelegraphHelper:
         result = await asyncio.to_thread(
             self.telegraph.create_account,
             short_name=self.short_name,
-            author_name=self.author_name,
-            author_url=self.author_url
         )
         self.access_token = result.get("access_token")
         if self.access_token:
             self.telegraph = Telegraph(access_token=self.access_token, domain=self.domain)
-            # persist token
+            # Persist token
             try:
                 import json
                 with open(self.token_file, "w") as f:
@@ -70,8 +65,6 @@ class TelegraphHelper:
             page = await asyncio.to_thread(
                 self.telegraph.create_page,
                 title=title,
-                author_name=self.author_name,
-                author_url=self.author_url,
                 html_content=content
             )
             return page
@@ -120,7 +113,7 @@ class TelegraphHelper:
 
             uploaded_url = await self.upload_to_envs(image_path)
             if uploaded_url:
-                # Only the image, no filename, no "Screenshot X"
+                # Only the image, no filename, no captions
                 th_html.append(f'<p><img src="{uploaded_url}"></p>')
                 th_html.append("<br>")
                 uploaded_count += 1
@@ -128,10 +121,9 @@ class TelegraphHelper:
             else:
                 LOGGER.error(f"Failed to upload {thumb} to envs.sh")
 
-        # Add footer with date and credit
+        # Add only date footer
         today = datetime.datetime.now().strftime("%B %d, %Y")
         th_html.append(f'<p><em>Published on {today}</em></p>')
-        th_html.append(f'<p><strong>{self.author_name}</strong> — <a href="{self.author_url}">Contact</a></p>')
 
         if uploaded_count == 0:
             LOGGER.error("No screenshots uploaded successfully; not creating page.")
