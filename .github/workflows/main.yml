@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       pdf_url:
-        description: "Enter the PDF download link"
+        description: "Enter the PDF download link (optional)"
         required: false
         type: string
 
@@ -20,6 +20,7 @@ jobs:
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
+          cache: "pip"
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y poppler-utils
@@ -28,10 +29,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install natsort aiofiles telegraph pillow httpx pdf2image requests
-
-      - name: Download PDF
-        run: |
-          curl -L "${{ github.event.inputs.pdf_url }}" -o input.pdf
 
       - name: Run Telegraph uploader
         run: python main.py
