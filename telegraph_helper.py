@@ -1,6 +1,7 @@
 # telegraph_helper.py
 
 import asyncio
+import json
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
@@ -14,46 +15,90 @@ import logging
 logging.basicConfig(level=logging.INFO)
 LOGGER = logging.getLogger("Telegraph")
 
+
 class TelegraphHelper:
-    def __init__(self, domain='graph.org'):
-        # Telegraph() is synchronous; create the instance now
-        self.telegraph = Telegraph(domain=domain)
+    def __init__(self, domain="graph.org", token_file="telegraph_token.json"):
+        self.domain = domain
+        self.token_file = token_file
+        self.telegraph = Telegraph(domain=self.domain)
         self.short_name = token_hex(4)
         self.access_token = None
-        self.author_name = 'Arctix'
-        self.author_url = 'https://t.me/arctixinc'
+        self.author_name = "Arctix"
+        self.author_url = "https://t.me/arctixinc"
+
+        # Try to load existing token
+        self._load_token()
+
+    def _load_token(self):
+        """Load token from file if it exists."""
+        if ospath.exists(self.token_file):
+            try:
+                with open(self.token_file, "r") as f:
+                    data = json.load(f)
+                    self.access_token = data.get("access_token")
+                    if self.access_token:
+                        self.telegraph = Telegraph(
+                            domain=self.domain, access_token=self.access_token
+                        )
+                        LOGGER.info("Loaded existing Telegraph access token.")
+            except Exception as e:
+                LOGGER.error(f"Failed to load token file: {e}")
+
+    def _save_token(self):
+        """Save token to file."""
+        if self.access_token:
+            try:
+                with open(self.token_file, "w") as f:
+                    json.dump({"access_token": self.access_token}, f)
+                LOGGER.info("Telegraph access token saved.")
+            except Exception as e:
+                LOGGER.error(f"Failed to save token: {e}")
 
     async def create_account(self):
-        LOGGER.info("Creating Telegraph Account (in thread)")
-        # run blocking create_account in a thread
+        """Create a Telegraph account only if no token exists."""
+        if self.access_token:
+            LOGGER.info("Using existing Telegraph account.")
+            return
+
+        LOGGER.info("Creating new Telegraph account...")
         result = await asyncio.to_thread(
             self.telegraph.create_account,
             short_name=self.short_name,
             author_name=self.author_name,
-            author_url=self.author_url
+            author_url=self.author_url,
         )
-        # create_account returns a dict; record token if present
-        self.access_token = result.get('access_token') or getattr(self.telegraph, 'get_access_token', lambda: None)()
-        LOGGER.info(f"Telegraph Account Generated : {self.short_name} (access_token set)")
+
+        self.access_token = result.get("access_token")
+        if self.access_token:
+            self.telegraph = Telegraph(
+                domain=self.domain, access_token=self.access_token
+            )
+            self._save_token()
+            LOGGER.info(
+                f"Telegraph Account Generated: {self.short_name} (access_token set)"
+            )
+        else:
+            LOGGER.error("Failed to generate access token!")
 
     async def create_page(self, title, content):
         try:
-            # create_page is blocking so run in thread
             page = await asyncio.to_thread(
                 self.telegraph.create_page,
                 title=title,
                 author_name=self.author_name,
                 author_url=self.author_url,
-                html_content=content
+                html_content=content,
             )
             return page
         except RetryAfterError as st:
-            LOGGER.warning(f'Telegraph Flood control exceeded. Sleeping {st.retry_after} seconds.')
+            LOGGER.warning(
+                f"Telegraph Flood control exceeded. Sleeping {st.retry_after} seconds."
+            )
             await asyncio.sleep(st.retry_after)
             return await self.create_page(title, content)
 
     async def safe_upload(self, path, retries=3, delay=2):
-        """Upload a file using upload_file (blocking) but run it in a thread and retry asynchronously."""
+        """Upload a file using upload_file with retries."""
         for attempt in range(retries):
             try:
                 result = await asyncio.to_thread(upload_file, path)
@@ -77,7 +122,7 @@ class TelegraphHelper:
             uploaded_path = await self.safe_upload(image_path)
             if uploaded_path:
                 th_html += f'<img src="https://graph.org{uploaded_path}"><br><br>'
-                await asyncio.sleep(1)  # slight delay between uploads
+                await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {thumb} after retries.")
 
