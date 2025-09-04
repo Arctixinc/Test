@@ -1,11 +1,11 @@
-# telegraph_helper.py
+# telegraph_helper.py (extended)
 
 import asyncio
 import json
+import requests
 from natsort import natsorted
 from os import path as ospath
 from aiofiles.os import listdir
-from telegraph.upload import upload_file
 from secrets import token_hex
 from telegraph import Telegraph
 from telegraph.exceptions import RetryAfterError
@@ -30,7 +30,6 @@ class TelegraphHelper:
         self._load_token()
 
     def _load_token(self):
-        """Load token from file if it exists."""
         if ospath.exists(self.token_file):
             try:
                 with open(self.token_file, "r") as f:
@@ -45,7 +44,6 @@ class TelegraphHelper:
                 LOGGER.error(f"Failed to load token file: {e}")
 
     def _save_token(self):
-        """Save token to file."""
         if self.access_token:
             try:
                 with open(self.token_file, "w") as f:
@@ -55,7 +53,6 @@ class TelegraphHelper:
                 LOGGER.error(f"Failed to save token: {e}")
 
     async def create_account(self):
-        """Create a Telegraph account only if no token exists."""
         if self.access_token:
             LOGGER.info("Using existing Telegraph account.")
             return
@@ -97,20 +94,25 @@ class TelegraphHelper:
             await asyncio.sleep(st.retry_after)
             return await self.create_page(title, content)
 
-    async def safe_upload(self, path, retries=3, delay=2):
-        """Upload a file using upload_file with retries."""
-        for attempt in range(retries):
-            try:
-                result = await asyncio.to_thread(upload_file, path)
-                if isinstance(result, list) and result:
-                    return result[0]  # return the file path string
-            except Exception as e:
-                LOGGER.error(f"Attempt {attempt + 1}: Failed to upload {path}: {e}")
-                if attempt < retries - 1:
-                    await asyncio.sleep(delay)
+    async def upload_to_envs(self, file_path):
+        """Upload file to envs.sh and return the public URL."""
+        try:
+            with open(file_path, "rb") as f:
+                files = {"file": f}
+                response = requests.post("https://envs.sh", files=files, timeout=15)
+
+            if response.ok:
+                url = response.text.strip()
+                LOGGER.info("File uploaded to envs.sh: %s", url)
+                return url
+            else:
+                LOGGER.error("envs.sh upload failed: %s", response.text)
+        except Exception as e:
+            LOGGER.critical("envs.sh upload failed: %s", e, exc_info=True)
         return None
 
     async def upload_screenshots_from_dir(self, thumbs_dir):
+        """Upload screenshots to envs.sh and create a Telegraph page with envs.sh links."""
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
             return None
@@ -119,12 +121,12 @@ class TelegraphHelper:
         thumbs = await listdir(thumbs_dir)
         for thumb in natsorted(thumbs):
             image_path = ospath.join(thumbs_dir, thumb)
-            uploaded_path = await self.safe_upload(image_path)
-            if uploaded_path:
-                th_html += f'<img src="https://graph.org{uploaded_path}"><br><br>'
+            uploaded_url = await self.upload_to_envs(image_path)
+            if uploaded_url:
+                th_html += f'<img src="{uploaded_url}"><br><br>'
                 await asyncio.sleep(1)
             else:
-                LOGGER.error(f"Failed to upload {thumb} after retries.")
+                LOGGER.error(f"Failed to upload {thumb} to envs.sh")
 
         page = await self.create_page(title="Screenshots", content=th_html)
-        return f"https://graph.org/{page['path']}"
+        return f"https://{self.domain}/{page['path']}"
