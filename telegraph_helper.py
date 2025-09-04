@@ -1,7 +1,6 @@
 # telegraph_helper.py
 
 import asyncio
-import os
 import logging
 import requests
 from natsort import natsorted
@@ -11,7 +10,6 @@ from telegraph import Telegraph
 from telegraph.exceptions import RetryAfterError
 from secrets import token_hex
 from pdf2image import convert_from_path
-from telegraph.upload import upload_file
 
 # Setup basic logging
 logging.basicConfig(level=logging.INFO)
@@ -57,12 +55,23 @@ class TelegraphHelper:
             return await self.create_page(title, content)
 
     async def safe_upload(self, path, retries=3, delay=2):
-        """Upload a file using upload_file (blocking) but run in thread and retry asynchronously."""
+        """Upload a file to envs.sh with retries."""
         for attempt in range(retries):
             try:
-                result = await asyncio.to_thread(upload_file, path)
-                if isinstance(result, list) and result:
-                    return result[0]
+                with open(path, "rb") as f:
+                    files = {"file": f}
+                    response = await asyncio.to_thread(
+                        requests.post,
+                        "https://envs.sh",
+                        files=files,
+                        timeout=30
+                    )
+                if response.ok:
+                    url = response.text.strip()
+                    LOGGER.info("File uploaded to envs.sh: %s", url)
+                    return url
+                else:
+                    LOGGER.error("envs.sh upload failed: %s", response.text)
             except Exception as e:
                 LOGGER.error(f"Attempt {attempt + 1}: Failed to upload {path}: {e}")
                 if attempt < retries - 1:
@@ -70,7 +79,7 @@ class TelegraphHelper:
         return None
 
     async def upload_screenshots_from_dir(self, thumbs_dir):
-        """Upload all images from a directory."""
+        """Upload all images from a directory to envs.sh and embed in Telegraph page."""
         if not ospath.isdir(thumbs_dir):
             LOGGER.error("Provided directory does not exist.")
             return None
@@ -79,9 +88,9 @@ class TelegraphHelper:
         thumbs = await listdir(thumbs_dir)
         for thumb in natsorted(thumbs):
             image_path = ospath.join(thumbs_dir, thumb)
-            uploaded_path = await self.safe_upload(image_path)
-            if uploaded_path:
-                th_html += f'<img src="https://graph.org{uploaded_path}" style="max-width:100%;margin:10px 0;"><br>'
+            uploaded_url = await self.safe_upload(image_path)
+            if uploaded_url:
+                th_html += f'<img src="{uploaded_url}" style="max-width:100%;margin:10px 0;"><br>'
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {thumb} after retries.")
@@ -90,7 +99,7 @@ class TelegraphHelper:
         return f"https://graph.org/{page['path']}"
 
     async def upload_from_pdf(self, pdf_url):
-        """Download a PDF, extract pages as images, upload them, and create a Telegraph page."""
+        """Download a PDF, extract pages as images, upload to envs.sh, and create a Telegraph page."""
         LOGGER.info(f"Downloading PDF from {pdf_url}")
         response = requests.get(pdf_url)
         pdf_path = "input.pdf"
@@ -109,9 +118,9 @@ class TelegraphHelper:
         # Build Telegraph HTML
         th_html = "<h3>PDF Report</h3><br>"
         for img_path in image_paths:
-            uploaded_path = await self.safe_upload(img_path)
-            if uploaded_path:
-                th_html += f'<img src="https://graph.org{uploaded_path}" style="max-width:100%;margin:10px 0;"><br>'
+            uploaded_url = await self.safe_upload(img_path)
+            if uploaded_url:
+                th_html += f'<img src="{uploaded_url}" style="max-width:100%;margin:10px 0;"><br>'
                 await asyncio.sleep(1)
             else:
                 LOGGER.error(f"Failed to upload {img_path} after retries.")
